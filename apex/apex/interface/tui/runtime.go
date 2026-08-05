@@ -458,17 +458,35 @@ func (r *GoTuiRuntime) Quit() {
 }
 
 func BinaryCommand() ([]string, error) {
-	source := TUISourceDir()
-	goModPath := filepath.Join(source, "go.mod")
-	if _, err := os.Stat(goModPath); err == nil {
-		if _, err := exec.LookPath("go"); err == nil {
-			return []string{"go", "run", "./cmd/apex-tui"}, nil
+	exe, err := os.Executable()
+	if err == nil {
+		localPath := filepath.Join(filepath.Dir(exe), TUIExecutable())
+		if _, err := os.Stat(localPath); err == nil {
+			return []string{localPath}, nil
 		}
+	}
+
+	if path, err := exec.LookPath(TUIExecutable()); err == nil {
+		return []string{path}, nil
 	}
 
 	packaged := utils.GetApexResourcePath("bin", TUIExecutable())
 	if _, err := os.Stat(packaged); err == nil {
 		return []string{packaged}, nil
+	}
+
+	source := TUISourceDir()
+	goModPath := filepath.Join(source, "go.mod")
+	if _, err := os.Stat(goModPath); err == nil {
+		if _, err := exec.LookPath("go"); err == nil {
+			// WARNING: go run does not pass ExtraFiles. We must build and run.
+			tmpBin := filepath.Join(os.TempDir(), "apex-tui-dev")
+			buildCmd := exec.Command("go", "build", "-o", tmpBin, "./cmd/apex-tui")
+			buildCmd.Dir = source
+			if err := buildCmd.Run(); err == nil {
+				return []string{tmpBin}, nil
+			}
+		}
 	}
 
 	return nil, fmt.Errorf("Bubble Tea TUI binary not found. Reinstall Apex from an official platform wheel.")
