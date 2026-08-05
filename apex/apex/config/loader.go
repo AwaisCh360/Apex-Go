@@ -142,7 +142,7 @@ func LoadSettings() *Settings {
 			ExtraHeaders:    getMap([]string{"DEDUPE_LLM_EXTRA_HEADERS"}, jsonEnv),
 		},
 		Runtime: RuntimeSettings{
-			Image:            getString([]string{"APEX_IMAGE"}, jsonEnv, "ghcr.io/useapex/apex-sandbox:1.2.0"),
+			Image:            getString([]string{"APEX_IMAGE"}, jsonEnv, "ghcr.io/usestrix/strix-sandbox:1.0.0"),
 			Backend:          getString([]string{"APEX_RUNTIME_BACKEND"}, jsonEnv, "docker"),
 			MaxContextImages: getInt([]string{"APEX_MAX_CONTEXT_IMAGES"}, jsonEnv, 3),
 		},
@@ -171,7 +171,7 @@ func LoadSettings() *Settings {
 	cached = s
 	_, err := os.Stat(sourcePath)
 	fileUsed := err == nil
-	logger.Printf("load_settings: resolved (override=%v, file_used=%v, json_keys=%d)", override != "", fileUsed, len(jsonEnv))
+	logger.Printf("load_settings: resolved (override=%v, file_used=%v, json_keys=%d, path=%s)", override != "", fileUsed, len(jsonEnv), sourcePath)
 	return s
 }
 

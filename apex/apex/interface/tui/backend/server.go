@@ -188,23 +188,6 @@ func (s *TuiBackendServer) receiveReady() error {
 	if message["type"] != "ready" {
 		return errors.New("TUI protocol handshake expected ready")
 	}
-	payload, ok := message["payload"].(map[string]interface{})
-	if !ok {
-		return errors.New("TUI ready payload must be an object")
-	}
-	caps, ok := payload["capabilities"].([]interface{})
-	if !ok {
-		return errors.New("TUI protocol capability mismatch")
-	}
-	if len(caps) != len(ProtocolCapabilities) {
-		return errors.New("TUI protocol capability mismatch")
-	}
-	for i, cap := range caps {
-		strCap, ok := cap.(string)
-		if !ok || strCap != ProtocolCapabilities[i] {
-			return errors.New("TUI protocol capability mismatch")
-		}
-	}
 	return nil
 }
 
@@ -803,6 +786,13 @@ func (s *TuiBackendServer) broadcastLoop() {
 			return
 		case <-s.broadcastEvent:
 			time.Sleep(50 * time.Millisecond)
+			if err := s.sendStateIfChanged(); err != nil {
+				if s.cancel != nil {
+					s.cancel()
+				}
+				s.closeSocket()
+				return
+			}
 			if err := s.flushUpdates(); err != nil {
 				log.Printf("TUI projection could not be framed: %v", err)
 				if s.cancel != nil {
