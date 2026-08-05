@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "results": [],
+      "tool": {
+        "driver": {
+          "informationUri": "https://apex.ai",
+          "name": "Apex",
+          "rules": [],
+          "version": "0.0.1"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}
+
