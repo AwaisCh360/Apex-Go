@@ -510,7 +510,7 @@ func (r *GoTuiRuntime) Run() error {
 		fmt.Fprintln(originalStdout, "\x1b[2mCompiling the TUI from source (cached after the first run)....\x1b[0m")
 	}
 
-	process, backendSocket, err = LaunchTUIProcess(r.ctx, command, env, cwd)
+	process, backendSocket, err = LaunchTUIProcess(r.ctx, command, env, cwd, os.Stdin, originalStdout, originalStderr)
 	if err != nil {
 		return &GoTuiPreActivationError{Msg: err.Error()}
 	}

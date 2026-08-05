@@ -10,7 +10,7 @@ import (
 	"os/exec"
 )
 
-func LaunchTUIProcess(ctx context.Context, command []string, env map[string]string, cwd string) (*exec.Cmd, net.Conn, error) {
+func LaunchTUIProcess(ctx context.Context, command []string, env map[string]string, cwd string, stdin, stdout, stderr *os.File) (*exec.Cmd, net.Conn, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, nil, err
@@ -35,6 +35,9 @@ func LaunchTUIProcess(ctx context.Context, command []string, env map[string]stri
 	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	cmd.Env = envMapToList(envCopy)
 	cmd.Dir = cwd
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		return nil, nil, err

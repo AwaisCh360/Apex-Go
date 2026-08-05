@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func LaunchTUIProcess(ctx context.Context, command []string, env map[string]string, cwd string) (*exec.Cmd, net.Conn, error) {
+func LaunchTUIProcess(ctx context.Context, command []string, env map[string]string, cwd string, stdin, stdout, stderr *os.File) (*exec.Cmd, net.Conn, error) {
 	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
 		return nil, nil, err
@@ -37,6 +37,9 @@ func LaunchTUIProcess(ctx context.Context, command []string, env map[string]stri
 	cmd.Env = envMapToList(envCopy)
 	cmd.Dir = cwd
 	cmd.ExtraFiles = []*os.File{childFile}
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
 		backendConn.Close()
