@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/useapex/apex/tui"
+	"github.com/AwaisCh360/Apex/apex/config"
+	"github.com/AwaisCh360/Apex/apex/core"
 )
 
 type InteractiveSetupUnavailableError struct {
@@ -68,6 +70,46 @@ func runGoTUI(args *CliArgs) error {
 		Target:                  args.Targets,
 		TargetList:              targetList,
 	}
+	tui.GlobalCallbacks = &tui.Callbacks{
+		LoadSettings: func() (string, string) {
+			s := config.LoadSettings()
+			return s.Llm.Model, s.Runtime.Image
+		},
+		PreflightModelConnection: func(model string) error {
+			return PreflightModelConnection(model, config.LoadSettings())
+		},
+		BuildTargetsInfo: func(ns *tui.Namespace) {
+			argsCopy := *args
+			argsCopy.TargetsInfo = ns.TargetsInfo
+			BuildTargetsInfo(&argsCopy)
+			ns.TargetsInfo = argsCopy.TargetsInfo
+		},
+		PrepareRun: func(ns *tui.Namespace) {
+			argsCopy := *args
+			argsCopy.TargetsInfo = ns.TargetsInfo
+			PrepareRun(&argsCopy)
+			ns.TargetsInfo = argsCopy.TargetsInfo
+			ns.LocalSources = argsCopy.LocalSources
+		},
+		TelemetryStart: func(ns *tui.Namespace) {
+			TelemetryStart(args)
+		},
+		PersistCurrent: func() {
+		},
+		RunApexScan: func(config map[string]interface{}, id, image string, localSources []map[string]interface{}, coord *core.AgentCoordinator, interactive bool, maxTurns int, maxBudget float64, eventSink func(string, interface{})) error {
+			var scanID *string
+			if id != "" {
+				scanID = &id
+			}
+			var maxBudgetUSD *float64
+			if maxBudget > 0 {
+				maxBudgetUSD = &maxBudget
+			}
+			_, err := core.RunApexScan(config, scanID, image, localSources, coord, interactive, maxTurns, maxBudgetUSD, nil, false, eventSink, nil, nil, nil)
+			return err
+		},
+	}
+
 	return tui.RunGoTui(tuiArgs)
 }
 

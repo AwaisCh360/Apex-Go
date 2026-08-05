@@ -30,12 +30,12 @@ var collectionItemLimits = map[string]int{
 
 // Controller defines the interface expected from the TUI controller.
 type Controller interface {
-	SetChangeCallback(func())
+	SetChangeCallback(ChangeCallback)
 	Handle(command string, payload map[string]interface{}) (map[string]interface{}, error)
 	Snapshot() map[string]interface{}
-	Collection(name string) []map[string]interface{}
-	CollectionSnapshot(name string) (sourceCursor *int, items []map[string]interface{})
-	CollectionChanges(name string, cursor int) (nextCursor int, items []map[string]interface{})
+	Collection(name string) ([]map[string]interface{}, error)
+	CollectionSnapshot(name string) (sourceCursor *int, items []map[string]interface{}, err error)
+	CollectionChanges(name string, cursor int) (nextCursor int, items []map[string]interface{}, err error)
 }
 
 type CollectionState struct {
@@ -593,7 +593,12 @@ func (s *TuiBackendServer) sendCollectionBootstrap(name string, items []map[stri
 	var projected []map[string]interface{}
 
 	if items == nil {
-		sourceCursor, projected = s.controller.CollectionSnapshot(name)
+		cursor, items, err := s.controller.CollectionSnapshot(name)
+		if err != nil {
+			return err
+		}
+		sourceCursor = cursor
+		projected = items
 	} else {
 		projected = items
 	}
@@ -626,13 +631,16 @@ func (s *TuiBackendServer) sendCollectionIfChanged(name string) error {
 	state := s.colls[name]
 
 	if name == "events" && state.Bootstrapped && state.SourceCursor != nil {
-		nextCursor, changed := s.controller.CollectionChanges(name, *state.SourceCursor)
+		nextCursor, items, err := s.controller.CollectionChanges(name, *state.SourceCursor)
+		if err != nil {
+			return err
+		}
 		if nextCursor == *state.SourceCursor {
 			return nil
 		}
 
 		operations := make([]map[string]interface{}, 0)
-		for _, item := range changed {
+		for _, item := range items {
 			id, ok := item["id"].(string)
 			if !ok || id == "" {
 				continue
@@ -669,7 +677,10 @@ func (s *TuiBackendServer) sendCollectionIfChanged(name string) error {
 		return nil
 	}
 
-	projected := s.controller.Collection(name)
+	projected, err := s.controller.Collection(name)
+	if err != nil {
+		return err
+	}
 	order, byID, fingerprints := collectionValues(projected)
 
 	if !state.Bootstrapped {

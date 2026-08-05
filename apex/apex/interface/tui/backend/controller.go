@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/AwaisCh360/Apex/apex/report"
 )
 
 // Stubs for types that are presumably defined elsewhere in the package.
@@ -29,14 +31,7 @@ type Args struct {
 
 
 
-type ReportState struct {
-	CaidoURL             *string
-	VulnerabilityReports []map[string]interface{}
-	RunRecord            map[string]interface{}
-}
 
-func (r *ReportState) GetTotalLLMUsage() map[string]interface{} { return nil }
-func (r *ReportState) GetRunDir() string                        { return "" }
 
 type Coordinator interface {
 	Send(agentID string, msg map[string]interface{}) (bool, error)
@@ -50,7 +45,7 @@ var (
 	stoppableAgentStatuses     = map[string]bool{"running": true, "waiting": true, "budget_paused": true}
 )
 
-func isSubscriptionRun(r *ReportState) bool { 
+func isSubscriptionRun(r *report.ReportState) bool { 
 	if r != nil && r.RunRecord != nil {
 		if sub, ok := r.RunRecord["subscription"].(bool); ok {
 			return sub
@@ -88,7 +83,7 @@ type TuiController struct {
 	Args        *Args
 	LiveView    *TuiLiveView
 	Coordinator Coordinator
-	ReportState *ReportState
+	ReportState       *report.ReportState
 	ScanCtx     context.Context
 
 	SetupMode       bool
@@ -123,7 +118,7 @@ func NewTuiController(
 	args *Args,
 	liveView *TuiLiveView,
 	coordinator Coordinator,
-	reportState *ReportState,
+	reportState *report.ReportState,
 	onStart StartCallback,
 	onQuit QuitCallback,
 	onChange ChangeCallback,
@@ -233,7 +228,7 @@ func (c *TuiController) NotifyChanged() {
 	}
 }
 
-func (c *TuiController) SetRuntime(reportState *ReportState, scanCtx context.Context) {
+func (c *TuiController) SetRuntime(reportState *report.ReportState, scanCtx context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if reportState != nil {
@@ -320,8 +315,8 @@ func (c *TuiController) Snapshot() map[string]interface{} {
 	}
 
 	caidoURL := ""
-	if c.ReportState != nil && c.ReportState.CaidoURL != nil {
-		caidoURL = *c.ReportState.CaidoURL
+	if c.ReportState != nil && c.ReportState.CaidoURL != "" {
+		caidoURL = c.ReportState.CaidoURL
 	}
 
 	targetsProj := []interface{}{}

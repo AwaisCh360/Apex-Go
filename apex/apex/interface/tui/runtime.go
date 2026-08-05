@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/useapex/apex/tui/backend"
+	"github.com/AwaisCh360/Apex/apex/core"
+	"github.com/AwaisCh360/Apex/apex/report"
 	"github.com/AwaisCh360/Apex/apex/utils"
 )
 
@@ -22,7 +25,7 @@ type Namespace struct {
 	Instruction             string
 	DiffScope               string
 	ScanMode                string
-	LocalSources            []string
+	LocalSources            []map[string]interface{}
 	ScopeMode               string
 	DiffBase                string
 	UserExplicitInstruction string
@@ -39,67 +42,18 @@ func (n *Namespace) Update(other *Namespace) {
 	*n = *other
 }
 
-type AgentCoordinator struct{}
-func (c *AgentCoordinator) MarkShuttingDown() {}
-func (c *AgentCoordinator) GraphSnapshot() (map[string]string, map[string]string, map[string]string, map[string]string, error) { return nil, nil, nil, nil, nil }
 
-type ReportState struct {
-	RunRecord                  map[string]interface{}
-	VulnerabilityReports       []interface{}
-	VulnerabilityFoundCallback func(interface{})
+type Callbacks struct {
+	LoadSettings             func() (model string, image string)
+	PreflightModelConnection func(model string) error
+	BuildTargetsInfo         func(args *Namespace)
+	PrepareRun               func(args *Namespace)
+	TelemetryStart           func(args *Namespace)
+	PersistCurrent           func()
+	RunApexScan              func(config map[string]interface{}, id, image string, localSources []map[string]interface{}, coord *core.AgentCoordinator, interactive bool, maxTurns int, maxBudget float64, eventSink func(string, interface{})) error
 }
-func NewReportState(runName string) *ReportState {
-	return &ReportState{ RunRecord: make(map[string]interface{}), VulnerabilityReports: []interface{}{} }
-}
-func (r *ReportState) HydrateFromRunDir()                 {}
-func (r *ReportState) SetScanConfig(config map[string]interface{}) {}
-func (r *ReportState) SaveRunData()                       {}
-func (r *ReportState) GetRunDir() string                  { return "" }
-func (r *ReportState) GetTotalLLMUsage() map[string]interface{} { return nil }
 
-type TuiController struct {
-	ScanMode       string
-	Instruction    string
-	MaxBudgetUSD   float64
-	MaxTurns       int
-	ScopeMode      string
-	DiffBase       string
-	Targets        []string
-	WorkspaceMount string
-	ScanState      string
-	Error          string
-	SetupMode      bool
-}
-func NewTuiController(args *Namespace, lv *TuiLiveView, coord *AgentCoordinator, onStart func(bool) error, onQuit func()) *TuiController { return &TuiController{} }
-func (c *TuiController) SetRuntime(reportState *ReportState) {}
-func (c *TuiController) NotifyChanged()                      {}
-func (c *TuiController) FailPreparation(err string)          {}
-func (c *TuiController) CloseViewer()                        {}
-func (c *TuiController) BeginPreparation()                   {}
-
-type TuiBackendServer struct { Activated bool }
-func NewTuiBackendServer(c *TuiController) *TuiBackendServer { return &TuiBackendServer{} }
-func (s *TuiBackendServer) Start(conn net.Conn) error { return nil }
-func (s *TuiBackendServer) Close() error              { return nil }
-
-func SetGlobalReportState(rs *ReportState)   {}
-
-func LoadSettings() struct {
-	LLM struct { Model string }
-	Runtime struct { Image string }
-} { return struct{LLM struct{Model string}; Runtime struct{Image string}}{} }
-func PreflightModelConnection(model string) error { return nil }
-func BuildTargetsInfo(args *Namespace)       {}
-func PrepareRun(args *Namespace)             {}
-func TelemetryStart(args *Namespace)         {}
-func PersistCurrent()                        {}
-func RunApexScan(config map[string]interface{}, id, image string, localSources []string, coord *AgentCoordinator, interactive bool, maxTurns int, maxBudget float64, eventSink func(string, interface{})) error { return nil }
-
-type BudgetExceededError struct{}
-
-func (e *BudgetExceededError) Error() string { return "Budget Exceeded" }
-
-// -- End of stubs --
+var GlobalCallbacks *Callbacks
 
 type GoTuiPreActivationError struct {
 	Msg string
@@ -112,16 +66,18 @@ func (e *GoTuiPreActivationError) Error() string {
 type GoTuiRuntime struct {
 	args                 *Namespace
 	liveView             *TuiLiveView
-	coordinator          *AgentCoordinator
-	reportState          *ReportState
+	coordinator          *core.AgentCoordinator
+	reportState          *report.ReportState
 	scanConfig           map[string]interface{}
 	scanTask             context.CancelFunc
 	scanDone             chan struct{}
 	scanError            error
 	lastSyncFingerprint  string
 	errorNotedAgents     map[string]bool
-	controller           *TuiController
-	server               *TuiBackendServer
+	controller           *backend.TuiController
+	server               *backend.TuiBackendServer
+	realServer           *backend.TuiBackendServer
+	realController       *backend.TuiController
 	ctx                  context.Context
 	cancel               context.CancelFunc
 }
@@ -131,14 +87,32 @@ func NewGoTuiRuntime(args *Namespace) *GoTuiRuntime {
 	rt := &GoTuiRuntime{
 		args:             args,
 		liveView:         &TuiLiveView{},
-		coordinator:      &AgentCoordinator{},
+		coordinator:      core.NewAgentCoordinator(),
 		scanConfig:       make(map[string]interface{}),
 		errorNotedAgents: make(map[string]bool),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
-	rt.controller = NewTuiController(args, rt.liveView, rt.coordinator, rt.StartFromSetup, rt.Quit)
-	rt.server = NewTuiBackendServer(rt.controller)
+
+	// For now, we will create the REAL backend server to handle the IPC protocol!
+	// We need to map our stub Namespace to backend.Args
+	bArgs := &backend.Args{
+		NeedsSetup: false,
+	}
+	realController := backend.NewTuiController(
+		bArgs,
+		nil, // liveView (can be nil)
+		nil, // coordinator
+		nil, // reportState
+		nil, // onStart
+		nil, // onQuit
+		nil, // onChange
+	)
+	rt.realController = realController
+	
+	// Create the REAL server!
+	rt.realServer = backend.NewTuiBackendServer(realController)
+
 	return rt
 }
 
@@ -158,33 +132,37 @@ func (r *GoTuiRuntime) InitRunState() {
 		"workspace_mount":    r.args.WorkspaceMount,
 		"workspace_subdir":   r.args.WorkspaceSubdir,
 	}
-	r.reportState = NewReportState(r.scanConfig["run_name"].(string))
+	r.reportState = report.NewReportState(r.scanConfig["run_name"].(string))
 	r.reportState.HydrateFromRunDir()
 	r.reportState.SetScanConfig(r.scanConfig)
 	r.reportState.SaveRunData()
-	SetGlobalReportState(r.reportState)
+	report.SetGlobalReportState(r.reportState)
 	r.liveView.HydrateFromRunDir(r.reportState.GetRunDir())
-	r.controller.SetRuntime(r.reportState)
-	r.reportState.VulnerabilityFoundCallback = func(_ interface{}) {
-		r.controller.NotifyChanged()
+	r.realController.SetRuntime(r.reportState, r.ctx)
+	r.reportState.VulnerabilityFoundCallback = func(_ map[string]interface{}) {
+		r.realController.NotifyChanged()
 	}
-	r.controller.NotifyChanged()
+	r.realController.NotifyChanged()
 }
 
 func (r *GoTuiRuntime) StartFromSetup(verify bool) error {
 	candidate := *r.args
-	candidate.ScanMode = r.controller.ScanMode
-	candidate.Instruction = r.controller.Instruction
-	instr := r.controller.Instruction
+	candidate.ScanMode = r.realController.ScanMode
+	candidate.Instruction = r.realController.Instruction
+	instr := r.realController.Instruction
 	if instr == "" {
 		candidate.UserInstruction = nil
 	} else {
 		candidate.UserInstruction = &instr
 	}
-	candidate.MaxBudgetUSD = r.controller.MaxBudgetUSD
-	candidate.MaxTurns = r.controller.MaxTurns
-	candidate.ScopeMode = r.controller.ScopeMode
-	candidate.DiffBase = r.controller.DiffBase
+	if r.realController.MaxBudgetUSD != nil {
+		candidate.MaxBudgetUSD = *r.realController.MaxBudgetUSD
+	}
+	candidate.MaxTurns = r.realController.MaxTurns
+	candidate.ScopeMode = r.realController.ScopeMode
+	if r.realController.DiffBase != nil {
+		candidate.DiffBase = *r.realController.DiffBase
+	}
 
 	var existingTargets []string
 	for _, target := range candidate.TargetsInfo {
@@ -193,26 +171,38 @@ func (r *GoTuiRuntime) StartFromSetup(verify bool) error {
 		}
 	}
 
-	targetsChanged := fmt.Sprintf("%v", r.controller.Targets) != fmt.Sprintf("%v", existingTargets)
-	settings := LoadSettings()
-	model := settings.LLM.Model
+	targetsChanged := fmt.Sprintf("%v", r.realController.Targets) != fmt.Sprintf("%v", existingTargets)
+	var model string
+	if GlobalCallbacks != nil && GlobalCallbacks.LoadSettings != nil {
+		model, _ = GlobalCallbacks.LoadSettings()
+	}
 
 	if verify {
-		if err := PreflightModelConnection(model); err != nil {
-			log.Printf("Go TUI setup model preflight failed: %v", err)
-			return fmt.Errorf("Model connection failed: %w", err)
+		if GlobalCallbacks != nil && GlobalCallbacks.PreflightModelConnection != nil {
+			if err := GlobalCallbacks.PreflightModelConnection(model); err != nil {
+				log.Printf("Go TUI setup model preflight failed: %v", err)
+				return fmt.Errorf("Model connection failed: %w", err)
+			}
 		}
 	}
 
-	candidate.WorkspaceMount = r.controller.WorkspaceMount
+	if r.realController.WorkspaceMount != nil {
+		candidate.WorkspaceMount = *r.realController.WorkspaceMount
+	}
 	if targetsChanged {
-		candidate.Target = append([]string{}, r.controller.Targets...)
+		candidate.Target = append([]string{}, r.realController.Targets...)
 		candidate.TargetList = []interface{}{}
-		BuildTargetsInfo(&candidate)
+		if GlobalCallbacks != nil && GlobalCallbacks.BuildTargetsInfo != nil {
+			GlobalCallbacks.BuildTargetsInfo(&candidate)
+		}
 	}
 
-	PrepareRun(&candidate)
-	TelemetryStart(&candidate)
+	if GlobalCallbacks != nil && GlobalCallbacks.PrepareRun != nil {
+		GlobalCallbacks.PrepareRun(&candidate)
+	}
+	if GlobalCallbacks != nil && GlobalCallbacks.TelemetryStart != nil {
+		GlobalCallbacks.TelemetryStart(&candidate)
+	}
 
 	r.args.Update(&candidate)
 	r.InitRunState()
@@ -221,18 +211,28 @@ func (r *GoTuiRuntime) StartFromSetup(verify bool) error {
 }
 
 func (r *GoTuiRuntime) PrepareAndStart() {
-	settings := LoadSettings()
-	model := settings.LLM.Model
-	if err := PreflightModelConnection(model); err != nil {
-		log.Printf("Go TUI scan preparation failed: %v", err)
-		r.controller.FailPreparation(err.Error())
-		return
+	var model string
+	if GlobalCallbacks != nil && GlobalCallbacks.LoadSettings != nil {
+		model, _ = GlobalCallbacks.LoadSettings()
 	}
-	PersistCurrent()
-	PrepareRun(r.args)
-	TelemetryStart(r.args)
+	if GlobalCallbacks != nil && GlobalCallbacks.PreflightModelConnection != nil {
+		if err := GlobalCallbacks.PreflightModelConnection(model); err != nil {
+			log.Printf("Go TUI scan preparation failed: %v", err)
+			r.realController.FailPreparation(err.Error())
+			return
+		}
+	}
+	if GlobalCallbacks != nil && GlobalCallbacks.PersistCurrent != nil {
+		GlobalCallbacks.PersistCurrent()
+	}
+	if GlobalCallbacks != nil && GlobalCallbacks.PrepareRun != nil {
+		GlobalCallbacks.PrepareRun(r.args)
+	}
+	if GlobalCallbacks != nil && GlobalCallbacks.TelemetryStart != nil {
+		GlobalCallbacks.TelemetryStart(r.args)
+	}
 
-	r.controller.ScanState = "running"
+	r.realController.ScanState = "running"
 	r.InitRunState()
 	r.StartScan()
 }
@@ -250,8 +250,10 @@ func (r *GoTuiRuntime) StartScan() {
 }
 
 func (r *GoTuiRuntime) runScan(ctx context.Context) {
-	settings := LoadSettings()
-	image := settings.Runtime.Image
+	var image string
+	if GlobalCallbacks != nil && GlobalCallbacks.LoadSettings != nil {
+		_, image = GlobalCallbacks.LoadSettings()
+	}
 	if image == "" {
 		image = "apex-sandbox:latest"
 	}
@@ -259,73 +261,79 @@ func (r *GoTuiRuntime) runScan(ctx context.Context) {
 	defer func() {
 		if _, err := r.syncAgentState(); err != nil {
 			log.Printf("Go TUI agent-state sync failed: %v", err)
-			r.controller.Error = fmt.Sprintf("Agent-state sync failed: %v", err)
+			errStr := fmt.Sprintf("Agent-state sync failed: %v", err)
+			r.realController.Error = &errStr
 		}
-		r.controller.NotifyChanged()
+		r.realController.NotifyChanged()
 	}()
 
-	err := RunApexScan(
-		r.scanConfig,
-		r.scanConfig["run_name"].(string),
-		image,
-		r.args.LocalSources,
-		r.coordinator,
-		true,
-		r.args.MaxTurns,
-		r.args.MaxBudgetUSD,
-		r.CaptureEvent,
-	)
+	var err error
+	if GlobalCallbacks != nil && GlobalCallbacks.RunApexScan != nil {
+		err = GlobalCallbacks.RunApexScan(
+			r.scanConfig,
+			r.scanConfig["run_name"].(string),
+			image,
+			r.args.LocalSources,
+			r.coordinator,
+			true,
+			r.args.MaxTurns,
+			r.args.MaxBudgetUSD,
+			r.CaptureEvent,
+		)
+	}
 
 	if err != nil {
-		if _, ok := err.(*BudgetExceededError); ok || err == context.Canceled {
-			reportStatus := ""
-			if r.reportState != nil {
-				if s, ok := r.reportState.RunRecord["status"].(string); ok {
-					reportStatus = s
-				}
-			}
-			if reportStatus == "completed" {
-				r.controller.ScanState = "completed"
-			} else {
-				r.controller.ScanState = "stopped"
-			}
+		if _, ok := err.(*core.BudgetExceededError); ok || err == context.Canceled {
+			// Expected termination
 		} else {
-			log.Printf("Go TUI scan failed: %v", err)
-			r.scanError = err
-			r.controller.Error = err.Error()
-			r.controller.ScanState = "failed"
+			errStr := err.Error()
+			r.realController.Error = &errStr
+			r.realController.ScanState = "failed"
 		}
 	} else {
 		if _, err := r.syncAgentState(); err != nil {
 			log.Printf("Go TUI agent-state sync failed: %v", err)
-			r.controller.Error = fmt.Sprintf("Agent-state sync failed: %v", err)
+			errStr := fmt.Sprintf("Agent-state sync failed: %v", err)
+			r.realController.Error = &errStr
 		}
-		if r.controller.ScanState == "running" {
-			r.controller.ScanState = "stopped"
+		if r.realController.ScanState == "running" {
+			r.realController.ScanState = "stopped"
 		}
 	}
 }
 
 func (r *GoTuiRuntime) CaptureEvent(agentID string, event interface{}) {
 	r.liveView.IngestSDKEvent(agentID, event)
-	r.controller.NotifyChanged()
+	r.realController.NotifyChanged()
 }
 
 func (r *GoTuiRuntime) syncAgentState() (bool, error) {
-	parentOf, statuses, names, errors, err := r.coordinator.GraphSnapshot()
+	snap, err := r.coordinator.Snapshot()
 	if err != nil {
 		return false, err
 	}
-	changed := false
-	for agentID, status := range statuses {
-		errMsg := errors[agentID]
-		name := names[agentID]
-		if name == "" {
-			name = agentID
-		}
-		parentID := parentOf[agentID]
+	statuses, _ := snap["statuses"].(map[string]interface{})
+	parentOf, _ := snap["parent_of"].(map[string]interface{})
+	names, _ := snap["names"].(map[string]interface{})
+	errors, _ := snap["errors"].(map[string]interface{})
 
-		upserted := r.liveView.UpsertAgent(agentID, name, parentID, status, errMsg)
+	changed := false
+	for agentID, statusIf := range statuses {
+		status, _ := statusIf.(string)
+		errMsgIf := errors[agentID]
+		var errMsg string
+		if errMsgIf != nil {
+			errMsg, _ = errMsgIf.(string)
+		}
+		var parentStr string
+		parentIf := parentOf[agentID]
+		if parentIf != nil {
+			parentStr, _ = parentIf.(string)
+		}
+		nameStr, _ := names[agentID].(string)
+		parentID := parentStr
+
+		upserted := r.liveView.UpsertAgent(agentID, nameStr, parentID, status, errMsg)
 		if upserted {
 			changed = true
 		}
@@ -355,7 +363,9 @@ func (r *GoTuiRuntime) syncAgentState() (bool, error) {
 
 	rootStatus := ""
 	if rootID != "" {
-		rootStatus = statuses[rootID]
+		if val, ok := statuses[rootID].(string); ok {
+			rootStatus = val
+		}
 	}
 
 	reportStatus := ""
@@ -365,25 +375,24 @@ func (r *GoTuiRuntime) syncAgentState() (bool, error) {
 		}
 	}
 
-	scanState := r.controller.ScanState
-	if rootStatus == "failed" || rootStatus == "crashed" {
-		scanState = "failed"
-		if rootID != "" && errors[rootID] != "" {
-			r.controller.Error = errors[rootID]
+	scanState := r.realController.ScanState
+	if (r.realController.ScanState == "failed" || r.realController.ScanState == "crashed") && rootID != "" {
+		if errVal, ok := errors[rootID].(string); ok {
+			r.realController.Error = &errVal
 		}
 	} else if scanState != "failed" {
 		if reportStatus == "completed" {
 			scanState = "completed"
 		} else if rootStatus == "stopped" {
 			scanState = "stopped"
-		} else if rootStatus == "completed" {
-			scanState = "failed"
-			r.controller.Error = "Scan ended without a completed report"
+		} else if r.realController.ScanState != "finished" {
+			msg := "Scan ended without a completed report"
+			r.realController.Error = &msg
 		}
 	}
 
-	if scanState != r.controller.ScanState {
-		r.controller.ScanState = scanState
+	if scanState != r.realController.ScanState {
+		r.realController.ScanState = scanState
 		changed = true
 	}
 
@@ -397,12 +406,8 @@ func (r *GoTuiRuntime) runtimeSyncFingerprint() string {
 	if r.reportState != nil {
 		usage = r.reportState.GetTotalLLMUsage()
 		for i, v := range r.reportState.VulnerabilityReports {
-			if vMap, ok := v.(map[string]interface{}); ok {
-				if id, exists := vMap["id"]; exists {
-					vulnerabilities = append(vulnerabilities, id)
-				} else {
-					vulnerabilities = append(vulnerabilities, i)
-				}
+			if id, exists := v["id"]; exists {
+				vulnerabilities = append(vulnerabilities, id)
 			} else {
 				vulnerabilities = append(vulnerabilities, i)
 			}
@@ -410,7 +415,7 @@ func (r *GoTuiRuntime) runtimeSyncFingerprint() string {
 	}
 
 	data := map[string]interface{}{
-		"scan_state":      r.controller.ScanState,
+		"scan_state":      r.realController.ScanState,
 		"usage":           usage,
 		"vulnerabilities": vulnerabilities,
 	}
@@ -432,7 +437,8 @@ func (r *GoTuiRuntime) SyncState(ctx context.Context) {
 					changed, err := r.syncAgentState()
 					if err != nil {
 						log.Printf("Go TUI agent-state sync failed: %v", err)
-						r.controller.Error = fmt.Sprintf("Agent-state sync failed: %v", err)
+						errStr := fmt.Sprintf("Agent-state sync failed: %v", err)
+						r.realController.Error = &errStr
 						changed = true
 					}
 					fingerprint := r.runtimeSyncFingerprint()
@@ -538,19 +544,23 @@ func (r *GoTuiRuntime) Run() error {
 		}
 		r.cancel()
 		r.Quit()
-		r.server.Close()
+		if r.realServer != nil {
+			r.realServer.Close()
+		}
 	}()
 
-	if err := r.server.Start(backendSocket); err != nil {
+	startErr := r.realServer.Start(backendSocket)
+
+	if startErr != nil {
 		TerminateProcess(process)
-		if !r.server.Activated {
-			return &GoTuiPreActivationError{Msg: err.Error()}
+		if !r.realServer.Activated {
+			return &GoTuiPreActivationError{Msg: startErr.Error()}
 		}
-		return err
+		return startErr
 	}
 
-	if !r.controller.SetupMode {
-		r.controller.BeginPreparation()
+	if !r.realController.Args.NeedsSetup {
+		// r.realController.BeginPreparation()
 		go r.PrepareAndStart()
 	}
 
