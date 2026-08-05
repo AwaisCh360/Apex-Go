@@ -1,0 +1,35 @@
+{
+  "auth_mode": "api_key",
+  "diff_scope": {
+    "active": false,
+    "mode": "auto"
+  },
+  "end_time": null,
+  "instruction": "say hi",
+  "llm_usage": {
+    "agents": [],
+    "cost": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "request_usage_entries": null,
+    "requests": 0,
+    "total_tokens": 0
+  },
+  "local_sources": null,
+  "non_interactive": true,
+  "run_id": "example-com_f968",
+  "run_name": "example-com_f968",
+  "scan_mode": "deep",
+  "scope_mode": "auto",
+  "start_time": "2026-08-05T12:29:06Z",
+  "status": "running",
+  "targets_info": [
+    {
+      "details": {
+        "target_url": "http://example.com"
+      },
+      "original": "http://example.com",
+      "type": "web_application"
+    }
+  ]
+}
